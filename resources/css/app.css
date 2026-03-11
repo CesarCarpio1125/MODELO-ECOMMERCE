@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS Custom Properties for Dark Mode */
+:root {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f9fafb;
+  --bg-tertiary: #f3f4f6;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --text-tertiary: #9ca3af;
+  --border-primary: #e5e7eb;
+  --border-secondary: #d1d5db;
+}
+
+.dark {
+  --bg-primary: #27272a;
+  --bg-secondary: #1f1f21;
+  --bg-tertiary: #18181b;
+  --text-primary: #ffffff;
+  --text-secondary: #d4d4d8;
+  --text-tertiary: #a1a1aa;
+  --border-primary: #3f3f46;
+  --border-secondary: #52525b;
+}
+
+/* Utility Classes for Consistent Dark Mode */
+.bg-primary {
+  background-color: var(--bg-primary);
+}
+
+.bg-secondary {
+  background-color: var(--bg-secondary);
+}
+
+.bg-tertiary {
+  background-color: var(--bg-tertiary);
+}
+
+.text-primary {
+  color: var(--text-primary);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-tertiary {
+  color: var(--text-tertiary);
+}
+
+.border-primary {
+  border-color: var(--border-primary);
+}
+
+.border-secondary {
+  border-color: var(--border-secondary);
+}
+
+/* Component-specific utilities */
+.card-bg {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+}
+
+.modal-bg {
+  background-color: var(--bg-primary);
+}
+
+.input-bg {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  color: var(--text-primary);
+}
+
+/* Hover states */
+.hover-card:hover {
+  background-color: var(--bg-secondary);
+  border-color: var(--border-secondary);
+}
+
+/* Focus states */
+.focus-ring:focus {
+  outline: 2px solid var(--border-primary);
+  outline-offset: 2px;
+}
