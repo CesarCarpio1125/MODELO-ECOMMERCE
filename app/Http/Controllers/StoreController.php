@@ -37,7 +37,8 @@ class StoreController extends Controller
             ->orderBy('created_at', 'desc')
             ->get()
             ->map(function ($product) {
-                $product->featured_image_url = $product->getFeaturedImageUrl();
+                $product->featured_image_url = \App\Services\ImageService::getFeaturedImage($product); // Base64 para NativePHP
+                $product->carousel_images = \App\Services\ImageService::getProductImages($product); // Base64 para NativePHP
                 return $product;
             });
 
@@ -111,18 +112,44 @@ class StoreController extends Controller
      */
     public function storeProduct(CreateProductRequest $request, Vendor $vendor)
     {
+        // Debug logging for FormData analysis in CREATE mode
+        \Log::info('StoreController: storeProduct called (CREATE MODE)', [
+            'vendor_id' => $vendor->id,
+            'has_files' => $request->hasFile('images') || $request->hasFile('featured_image'),
+            'all_files' => $request->allFiles(),
+            'request_data' => $request->all(),
+            'content_type' => $request->header('Content-Type'),
+            'images_array' => $request->input('images'),
+            'images_files' => $request->file('images'),
+            'featured_image_file' => $request->file('featured_image')
+        ]);
+        
         try {
             // Verify ownership
             if ((string) $vendor->user_id !== (string) auth()->id()) {
                 abort(403, 'You can only create products in your own stores.');
             }
 
-            $product = $this->productService->createProduct($vendor, $request->validated());
+            $validatedData = $request->validated();
+            
+            \Log::info('StoreController: CREATE validation passed', [
+                'validated_keys' => array_keys($validatedData),
+                'validated_images' => $validatedData['images'] ?? 'not_set',
+                'validated_featured_image' => isset($validatedData['featured_image']) ? get_class($validatedData['featured_image']) : 'not_set'
+            ]);
+            
+            $product = $this->productService->createProduct($vendor, $validatedData);
 
             return redirect()
                 ->route('store.show', ['slug' => $vendor->store_slug])
                 ->with('success', 'Product created successfully!');
         } catch (\Exception $e) {
+            \Log::error('StoreController: CREATE failed', [
+                'vendor_id' => $vendor->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return back()
                 ->withErrors(['create_product' => $e->getMessage()]);
         }
@@ -197,6 +224,18 @@ class StoreController extends Controller
      */
     public function updateProduct(UpdateProductRequest $request, string $productId)
     {
+        // Debug logging for FormData analysis
+        \Log::info('StoreController: updateProduct called', [
+            'product_id' => $productId,
+            'has_files' => $request->hasFile('images') || $request->hasFile('featured_image'),
+            'all_files' => $request->allFiles(),
+            'request_data' => $request->all(),
+            'content_type' => $request->header('Content-Type'),
+            'images_array' => $request->input('images'),
+            'images_files' => $request->file('images'),
+            'featured_image_file' => $request->file('featured_image')
+        ]);
+        
         // Find product manually to avoid ULID binding issues
         $product = Product::findOrFail($productId);
 
@@ -212,12 +251,26 @@ class StoreController extends Controller
         $this->authorize('update', $product);
 
         try {
-            $updatedProduct = $this->productService->updateProduct($product, $request->validated());
+            $validatedData = $request->validated();
+            
+            \Log::info('StoreController: Validation passed', [
+                'validated_keys' => array_keys($validatedData),
+                'validated_images' => $validatedData['images'] ?? 'not_set',
+                'validated_featured_image' => isset($validatedData['featured_image']) ? get_class($validatedData['featured_image']) : 'not_set'
+            ]);
+            
+            $updatedProduct = $this->productService->updateProduct($product, $validatedData);
 
             return redirect()
                 ->route('store.show', ['slug' => $product->vendor->store_slug])
                 ->with('success', 'Product updated successfully!');
         } catch (\Exception $e) {
+            \Log::error('StoreController: Update failed', [
+                'product_id' => $productId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return back()
                 ->withErrors(['update_product' => $e->getMessage()]);
         }

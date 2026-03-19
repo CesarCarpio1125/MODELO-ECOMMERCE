@@ -25,6 +25,47 @@ class ImageHelper
      */
     const PNG_COMPRESSION = 6;
     /**
+     * Convert image path to Base64 for NativePHP environments
+     */
+    public static function getImageAsBase64(?string $path): ?string
+    {
+        if (!$path) {
+            return null;
+        }
+        
+        // Solo convertir en NativePHP
+        if (!self::isNativeEnvironment()) {
+            return self::getImageUrl($path);
+        }
+        
+        try {
+            // Construir ruta completa al archivo
+            $fullPath = storage_path('app/public/' . ltrim($path, '/'));
+            
+            if (!file_exists($fullPath)) {
+                Log::warning('ImageHelper: File not found for Base64 conversion', [
+                    'path' => $path,
+                    'full_path' => $fullPath
+                ]);
+                return null;
+            }
+            
+            // Leer archivo y convertir a Base64
+            $imageData = file_get_contents($fullPath);
+            $mimeType = mime_content_type($fullPath);
+            
+            return 'data:' . $mimeType . ';base64,' . base64_encode($imageData);
+            
+        } catch (\Exception $e) {
+            Log::error('ImageHelper: Failed to convert image to Base64', [
+                'path' => $path,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
+    /**
      * Generate proper image URL for both web and Electron environments
      */
     public static function getImageUrl(?string $path, ?int $timestamp = null): ?string

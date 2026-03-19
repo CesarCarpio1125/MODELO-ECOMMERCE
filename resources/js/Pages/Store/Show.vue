@@ -3,6 +3,7 @@ import { Head } from '@inertiajs/vue3'
 import { Link, usePage, router } from '@inertiajs/vue3'
 import { ref } from 'vue'
 import { useNativeImages } from '@/composables/useNativeImages'
+import ProductCard from '@/Components/Product/ProductCard.vue'
 
 const { vendor, products } = defineProps({
     vendor: {
@@ -37,19 +38,6 @@ if (isNative()) {
     setTimeout(() => {
         refreshImageCache()
     }, 1000)
-}
-
-const formatPrice = (price) => {
-    return new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-    }).format(price)
-}
-
-const getStockStatus = (stock) => {
-    if (stock === 0) return { text: 'Out of Stock', color: 'text-red-600' }
-    if (stock <= 5) return { text: 'Low Stock', color: 'text-yellow-600' }
-    return { text: 'In Stock', color: 'text-green-600' }
 }
 
 // Check if current user owns this store
@@ -161,81 +149,14 @@ const deleteProduct = async (productId) => {
                 </h2>
                 
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                    <div
+                    <ProductCard
                         v-for="product in products"
                         :key="product.id"
-                        class="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-lg transition-shadow overflow-hidden"
-                    >
-                        <!-- Product Image -->
-                        <div class="aspect-w-16 aspect-h-9 bg-gray-200 dark:bg-gray-700">
-                            <img
-                                v-if="product.featured_image && product.featured_image_url && !productImageErrors[product.id] && !imageErrors[product.id]"
-                                :src="getImageUrl(product.featured_image_url?.replace(/^.*\/storage\//, ''))"
-                                :alt="product.name"
-                                class="w-full h-48 object-cover"
-                                @load="handleImageLoad(product.id)"
-                                @error="() => { handleImageError(product.id); productImageErrors[product.id] = true }"
-                            />
-                            <div v-else class="w-full h-48 bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
-                                <svg class="w-12 h-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                </svg>
-                            </div>
-                        </div>
-
-                        <!-- Product Info -->
-                        <div class="p-4">
-                            <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                                {{ product.name }}
-                            </h3>
-                            
-                            <p v-if="product.description" class="text-sm text-gray-600 dark:text-gray-400 mb-3 line-clamp-2">
-                                {{ product.description }}
-                            </p>
-
-                            <div class="space-y-2">
-                                <div class="flex justify-between items-center">
-                                    <span class="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-                                        {{ formatPrice(product.price) }}
-                                    </span>
-                                    <span :class="getStockStatus(product.stock_quantity).color" class="text-sm font-medium">
-                                        {{ getStockStatus(product.stock_quantity).text }}
-                                    </span>
-                                </div>
-                                
-                                <div v-if="product.variants && product.variants.length > 0" class="text-sm text-gray-500 dark:text-gray-400">
-                                    {{ product.variants.length }} variants available
-                                </div>
-                            </div>
-
-                            <!-- Actions -->
-                            <div class="mt-4 space-y-2">
-                                <!-- Add to Cart (only for non-owners) -->
-                                <button 
-                                    v-if="!isStoreOwner()"
-                                    class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
-                                >
-                                    Add to Cart
-                                </button>
-                                
-                                <!-- Edit/Delete actions (only for owners) -->
-                                <div v-else class="flex gap-2">
-                                    <Link 
-                                        :href="route('store.products.edit', product.id)"
-                                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors text-center"
-                                    >
-                                        Edit
-                                    </Link>
-                                    <button 
-                                        @click="deleteProduct(product.id)"
-                                        class="flex-1 bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
-                                    >
-                                        Delete
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                        :product="product"
+                        :show-actions="true"
+                        @edit="router.visit(route('store.products.edit', product.id))"
+                        @delete="deleteProduct(product.id)"
+                    />
                 </div>
             </div>
 

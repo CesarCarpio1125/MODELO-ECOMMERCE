@@ -98,6 +98,10 @@ class DashboardService
 
     private function getUserSpecificStats($user): array
     {
+        // Get user's vendor to count products correctly
+        $userVendor = $user->vendors()->first();
+        $productCount = $userVendor ? $userVendor->products()->count() : 0;
+        
         return [
             [
                 'label' => 'My Orders',
@@ -115,7 +119,7 @@ class DashboardService
             ],
             [
                 'label' => 'Products Created',
-                'value' => Product::where('created_by', $user->id)->count(),
+                'value' => $productCount, // Fixed: Count by vendor_id, not created_by
                 'change' => '+1.5%',
                 'trend' => 'up',
                 'color' => 'purple',

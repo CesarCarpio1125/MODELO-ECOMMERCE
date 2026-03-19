@@ -76,10 +76,79 @@ Route::get('/api/public/status', function () {
     ]);
 });
 
-// Public API route for images - bypasses CSRF and web middleware
+// MediaLibrary images API - serve images from MediaLibrary storage
+Route::get('/api/images/vendors/{vendor_id}/{filename}', function ($vendor_id, $filename) {
+    try {
+        // Buscar el media por filename
+        $media = \Spatie\MediaLibrary\MediaCollections\Models\Media::where('file_name', $filename)->first();
+        
+        if (!$media) {
+            abort(404, 'Image not found');
+        }
+        
+        // Construir la ruta al archivo en storage
+        $filePath = storage_path('app/public/' . $media->id . '/' . $filename);
+        
+        if (!file_exists($filePath)) {
+            abort(404, 'File not found');
+        }
+        
+        // Servir el archivo usando el mismo método que ImageHelper
+        return \App\Helpers\ImageHelper::serveImage($media->id . '/' . $filename);
+            
+    } catch (\Exception $e) {
+        Log::error('MediaLibrary API Image route error', [
+            'vendor_id' => $vendor_id,
+            'filename' => $filename,
+            'error' => $e->getMessage()
+        ]);
+        abort(404, 'Image not found');
+    }
+})->name('api.media.image');
+
+// API route para MediaLibrary por ID (como ImageHelper)
 Route::get('/api/images/{path}', function ($path) {
     try {
+        // Si es una ruta de MediaLibrary (formato: ID/filename)
+        if (preg_match('/^(\d+)\/(.+)$/', $path, $matches)) {
+            $mediaId = $matches[1];
+            $filename = $matches[2];
+            
+            // Verificar si es una conversión
+            if (preg_match('/^(.+)\/conversions\/(.+)$/', $path, $conversionMatches)) {
+                $mediaId = $conversionMatches[1];
+                $conversionFile = $conversionMatches[2];
+                
+                // Buscar el media por ID
+                $media = \Spatie\MediaLibrary\MediaCollections\Models\Media::find($mediaId);
+                
+                if ($media) {
+                    // Construir la ruta al archivo de conversión
+                    $conversionPath = storage_path('app/public/' . $mediaId . '/conversions/' . $conversionFile);
+                    
+                    if (file_exists($conversionPath)) {
+                        $mimeType = mime_content_type($conversionPath);
+                        $file = fopen($conversionPath, 'rb');
+                        
+                        return response(stream_get_contents($file))
+                            ->header('Content-Type', $mimeType)
+                            ->header('Cache-Control', 'public, max-age=31536000')
+                            ->header('Expires', gmdate('D, d M Y H:i:s \G\M\T', time() + 31536000));
+                    }
+                }
+            } else {
+                // Es el archivo original
+                $media = \Spatie\MediaLibrary\MediaCollections\Models\Media::find($mediaId);
+                
+                if ($media && $media->file_name === $filename) {
+                    return \App\Helpers\ImageHelper::serveImage($path);
+                }
+            }
+        }
+        
+        // Fallback al método original de ImageHelper
         return \App\Helpers\ImageHelper::serveImage($path);
+        
     } catch (\Exception $e) {
         Log::error('API Image route error', [
             'path' => $path,
@@ -100,18 +169,43 @@ Route::get('/storage/{path}', function ($path) {
         "[" . date('Y-m-d H:i:s') . "] Route called with path: $path\n",
         FILE_APPEND
     );
-
-    try {
-        return \App\Helpers\ImageHelper::serveImage($path);
-    } catch (\Exception $e) {
-        // Fallback: write error to debug file
-        file_put_contents(
-            storage_path('debug_route.log'),
-            "[" . date('Y-m-d H:i:s') . "] Exception: " . $e->getMessage() . "\n",
-            FILE_APPEND
-        );
-        throw $e;
+    
+    // Check if this is a MediaLibrary conversion request
+    if (preg_match('/^(\d+)\/conversions\/(.+)$/', $path, $matches)) {
+        $mediaId = $matches[1];
+        $conversionFile = $matches[2];
+        
+        // Buscar el media por ID
+        $media = \Spatie\MediaLibrary\MediaCollections\Models\Media::find($mediaId);
+        
+        if ($media) {
+            // Construir la ruta al archivo de conversión
+            $conversionPath = storage_path('app/public/' . $mediaId . '/conversions/' . $conversionFile);
+            
+            if (file_exists($conversionPath)) {
+                $mimeType = mime_content_type($conversionPath);
+                $file = fopen($conversionPath, 'rb');
+                
+                return response(stream_get_contents($file))
+                    ->header('Content-Type', $mimeType)
+                    ->header('Cache-Control', 'public, max-age=31536000');
+            }
+        }
     }
+    
+    // Fallback to original logic
+    $fullPath = storage_path('app/public/' . $path);
+    
+    if (!file_exists($fullPath)) {
+        abort(404, 'File not found');
+    }
+    
+    $mimeType = mime_content_type($fullPath);
+    $file = fopen($fullPath, 'rb');
+    
+    return response(stream_get_contents($file))
+        ->header('Content-Type', $mimeType)
+        ->header('Cache-Control', 'public, max-age=31536000');
 })->where('path', '.*');
 
 // Store management routes (vendor only)

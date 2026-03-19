@@ -6,10 +6,13 @@ use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Spatie\MediaLibrary\HasMedia;
+use Spatie\MediaLibrary\InteractsWithMedia;
+use Spatie\MediaLibrary\MediaCollections\Models\Media;
 
-class Product extends Model
+class Product extends Model implements HasMedia
 {
-    use HasUlids;
+    use HasUlids, InteractsWithMedia;
 
     protected $fillable = [
         'vendor_id',
@@ -43,7 +46,7 @@ class Product extends Model
         'cost_price' => 'decimal:2',
         'weight' => 'decimal:2',
         'dimensions' => 'array',
-        'images' => 'array',
+        'images' => 'array', // Mantener por compatibilidad temporal
         'attributes' => 'array',
         'tags' => 'array',
         'status' => 'string',
@@ -51,6 +54,54 @@ class Product extends Model
         'is_active' => 'boolean',
         'is_featured' => 'boolean',
     ];
+
+    /**
+     * Definir las colecciones de media para el producto.
+     */
+    public function registerMediaCollections(): void
+    {
+        // Imagen destacada (solo una)
+        $this->addMediaCollection('featured-image')
+            ->singleFile()
+            ->acceptsMimeTypes(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])
+            ->useDisk('public');
+
+        // Galería de imágenes (múltiples)
+        $this->addMediaCollection('product-gallery')
+            ->acceptsMimeTypes(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])
+            ->useDisk('public');
+    }
+
+    /**
+     * Definir las conversiones de imágenes.
+     */
+    public function registerMediaConversions(Media $media = null): void
+    {
+        // Para imagen destacada
+        $this->addMediaConversion('thumb')
+            ->width(150)
+            ->height(150)
+            ->sharpen(10)
+            ->performOnCollections('featured-image', 'product-gallery');
+
+        $this->addMediaConversion('medium')
+            ->width(600)
+            ->height(600)
+            ->sharpen(10)
+            ->performOnCollections('featured-image', 'product-gallery');
+
+        $this->addMediaConversion('large')
+            ->width(1200)
+            ->height(1200)
+            ->sharpen(10)
+            ->performOnCollections('featured-image', 'product-gallery');
+
+        // Para galería - formato WebP optimizado
+        $this->addMediaConversion('webp')
+            ->format('webp')
+            ->quality(80)
+            ->performOnCollections('featured-image', 'product-gallery');
+    }
 
     public function vendor(): BelongsTo
     {
@@ -93,10 +144,16 @@ class Product extends Model
     }
 
     /**
-     * Get the featured image URL.
+     * Obtener URL de la imagen destacada usando MediaLibrary.
      */
     public function getFeaturedImageUrl(): ?string
     {
+        // Priorizar MediaLibrary sobre el campo legacy
+        if ($this->hasMedia('featured-image')) {
+            return $this->getFirstMediaUrl('featured-image', 'medium');
+        }
+
+        // Fallback al sistema antiguo por compatibilidad
         if (! $this->featured_image) {
             return null;
         }
@@ -105,15 +162,72 @@ class Product extends Model
     }
 
     /**
-     * Get all product image URLs.
+     * Obtener todas las URLs de las imágenes del producto usando MediaLibrary.
      */
     public function getImageUrls(): array
     {
+        // Priorizar MediaLibrary
+        if ($this->hasMedia('product-gallery')) {
+            return $this->getMedia('product-gallery')
+                ->map(fn ($media) => [
+                    'id' => $media->id,
+                    'url' => $media->getUrl('medium'),
+                    'thumb' => $media->getUrl('thumb'),
+                    'large' => $media->getUrl('large'),
+                    'webp' => $media->getUrl('webp'),
+                    'name' => $media->name,
+                    'order' => $media->order_column,
+                ])
+                ->sortBy('order')
+                ->values()
+                ->toArray();
+        }
+
+        // Fallback al sistema antiguo por compatibilidad
         if (! $this->images) {
             return [];
         }
 
-        return collect($this->images)->map(fn ($image) => \App\Helpers\ImageHelper::getImageUrl($image))->toArray();
+        return collect($this->images)->map(fn ($image) => [
+            'url' => \App\Helpers\ImageHelper::getImageUrl($image),
+            'thumb' => \App\Helpers\ImageHelper::getImageUrl($image),
+            'large' => \App\Helpers\ImageHelper::getImageUrl($image),
+            'name' => basename($image),
+            'order' => 0,
+        ])->toArray();
+    }
+
+    /**
+     * Obtener todas las imágenes para el carrusel (incluye destacada).
+     */
+    public function getCarouselImages(): array
+    {
+        $images = [];
+
+        // Agregar imagen destacada primero si existe
+        if ($featuredUrl = $this->getFeaturedImageUrl()) {
+            $images[] = [
+                'id' => 'featured',
+                'url' => $featuredUrl,
+                'thumb' => $this->hasMedia('featured-image') 
+                    ? $this->getFirstMediaUrl('featured-image', 'thumb')
+                    : $featuredUrl,
+                'large' => $this->hasMedia('featured-image') 
+                    ? $this->getFirstMediaUrl('featured-image', 'large')
+                    : $featuredUrl,
+                'webp' => $this->hasMedia('featured-image') 
+                    ? $this->getFirstMediaUrl('featured-image', 'webp')
+                    : null,
+                'name' => 'Featured Image',
+                'order' => -1,
+            ];
+        }
+
+        // Agregar resto de la galería
+        $galleryImages = $this->getImageUrls();
+        $images = array_merge($images, $galleryImages);
+
+        return $images;
     }
 
     /**

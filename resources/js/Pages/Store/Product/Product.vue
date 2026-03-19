@@ -30,24 +30,57 @@ const form = useForm({
   name: props.product?.name || '',
   description: props.product?.description || '',
   price: props.product?.price || '',
-  stock_quantity: props.product?.stock_quantity || 1
+  stock_quantity: props.product?.stock_quantity || 1,
+  featured_image: null,
+  images: []
 })
 
 const imagePreviews = ref([])
+const featuredImagePreview = ref(null)
 const isDragging = ref(false)
 
 // Cargar imágenes existentes si está en edit mode
-if (isEditMode.value && props.product?.images) {
-  imagePreviews.value = props.product.images.map(img => ({
-    url: img.url,
-    id: img.id,
-    existing: true
-  }))
+if (isEditMode.value && props.product) {
+  // Cargar imagen destacada existente
+  if (props.product.featured_image_url) {
+    featuredImagePreview.value = props.product.featured_image_url
+  }
+  
+  // Cargar galería existente
+  if (props.product.getCarouselImages) {
+    const carouselImages = props.product.getCarouselImages()
+    imagePreviews.value = carouselImages.map(img => ({
+      url: img.url,
+      id: img.id,
+      existing: true,
+      name: img.name
+    }))
+  } else if (props.product.images) {
+    // Fallback para sistema legacy
+    imagePreviews.value = props.product.images.map((img, index) => ({
+      url: typeof img === 'string' ? img : img.url,
+      id: img.id || `legacy-${index}`,
+      existing: true,
+      name: img.name || `Image ${index + 1}`
+    }))
+  }
 }
 
 const handleFileUpload = (event) => {
   const files = Array.from(event.target.files)
   processFiles(files)
+}
+
+const handleFeaturedImageUpload = (event) => {
+  const file = event.target.files[0]
+  if (file && file.type.startsWith('image/')) {
+    form.featured_image = file
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      featuredImagePreview.value = e.target.result
+    }
+    reader.readAsDataURL(file)
+  }
 }
 
 const handleDrop = (event) => {
@@ -67,18 +100,32 @@ const handleDragLeave = () => {
 }
 
 const processFiles = (files) => {
-  files.forEach(file => {
+  console.log('DEBUG - Processing files:', files.length)
+  files.forEach((file, index) => {
+    console.log(`DEBUG - File ${index}:`, {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      isImage: file.type.startsWith('image/')
+    })
+    
     if (file.type.startsWith('image/')) {
       const reader = new FileReader()
       reader.onload = (e) => {
-        imagePreviews.value.push({
+        const newImage = {
           url: e.target.result,
           file: file,
           id: Date.now() + Math.random(),
           existing: false
-        })
+        }
+        
+        console.log('DEBUG - Adding new image to previews:', newImage)
+        imagePreviews.value.push(newImage)
+        console.log('DEBUG - Total previews now:', imagePreviews.value.length)
       }
       reader.readAsDataURL(file)
+    } else {
+      console.warn(`DEBUG - Skipping non-image file: ${file.name} (${file.type})`)
     }
   })
 }
@@ -87,59 +134,148 @@ const removeImage = (imageId) => {
   imagePreviews.value = imagePreviews.value.filter(img => img.id !== imageId)
 }
 
-const submit = () => {
+const submit = async () => {
   if (isEditMode.value) {
-    // Edit mode - use proper Inertia form submission with FormData
+    // Edit mode - usar FormData con fetch directo para archivos
     const formData = new FormData()
     formData.append('name', form.name)
     formData.append('description', form.description)
     formData.append('price', form.price)
     formData.append('stock_quantity', form.stock_quantity)
+    formData.append('_method', 'PUT') // Method spoofing para PUT
     
-    // Solo agregar imágenes nuevas (no las existentes)
-    const newImages = imagePreviews.value.filter(img => !img.existing)
-    newImages.forEach((img, index) => {
-      formData.append(`images[${index}]`, img.file)
+    // Debug logging
+    console.log('DEBUG - Submitting with:', {
+      imagePreviews: imagePreviews.value,
+      newImages: imagePreviews.value.filter(img => !img.existing),
+      featuredImage: form.featured_image
     })
-
-    // Use PUT method for updates
-    form.put(route('store.products.update', props.product.id), {
-      data: formData,
-      onSuccess: (page) => {
-        // Show success message and redirect automatically handled by Inertia
-        console.log('Product updated successfully')
-        // Let Inertia handle the redirect from backend automatically
-        // No manual redirect needed - backend handles it correctly
-      },
-      onError: (errors) => {
-        console.error('Update errors:', errors)
+    
+    // Agregar imagen destacada si hay una nueva
+    if (form.featured_image) {
+      formData.append('featured_image', form.featured_image)
+      console.log('DEBUG - Added featured image:', form.featured_image.name)
+    }
+    
+    // Agregar imágenes nuevas
+    const newImages = imagePreviews.value.filter(img => !img.existing)
+    console.log('DEBUG - New images to upload:', newImages.length)
+    
+    newImages.forEach((img, index) => {
+      if (img.file) {
+        formData.append(`images[${index}]`, img.file)
+        console.log(`DEBUG - Adding image ${index}:`, img.file.name)
+      } else {
+        console.warn(`DEBUG - Image ${index} has no file:`, img)
       }
     })
-  } else {
-    // Create mode
-    const formData = new FormData()
-    formData.append('name', form.name)
-    formData.append('description', form.description)
-    formData.append('price', form.price)
-    formData.append('stock_quantity', form.stock_quantity)
     
-    // Solo agregar imágenes nuevas
-    const newImages = imagePreviews.value.filter(img => !img.existing)
-    newImages.forEach((img, index) => {
-      formData.append(`images[${index}]`, img.file)
-    })
+    // Debug FormData contents
+    console.log('DEBUG - FormData contents:')
+    for (let [key, value] of formData.entries()) {
+      console.log(`  ${key}:`, value instanceof File ? value.name : value)
+    }
 
-    form.post(route('store.products.store', props.vendor.id), {
-      data: formData,
-      onSuccess: () => {
-        form.reset()
-        imagePreviews.value = []
-        // If no vendor, redirect to vendor dashboard
-        if (!props.vendor) {
-          window.location.href = route('vendor.dashboard')
+    try {
+      const response = await fetch(route('store.products.update', props.product.id), {
+        method: 'POST',
+        headers: {
+          'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+          'Accept': 'application/json',
+        },
+        body: formData
+      })
+      
+      if (response.ok) {
+        console.log('DEBUG - Product updated successfully')
+        // Redirigir usando el vendor del producto o fallback a manage
+        const redirectUrl = props.product?.vendor?.store_slug 
+          ? route('store.show', [props.product.vendor.store_slug])
+          : route('store.manage')
+        window.location.href = redirectUrl
+      } else {
+        const error = await response.json()
+        console.error('DEBUG - Update errors:', error)
+        // Handle validation errors
+        if (error.errors) {
+          // Mostrar errores de validación
+          Object.entries(error.errors).forEach(([field, messages]) => {
+            console.error(`${field}:`, messages)
+          })
         }
       }
+    } catch (error) {
+      console.error('DEBUG - Network error:', error)
+    }
+  } else {
+    // Create mode - usar fetch directo para FormData
+    console.log('DEBUG - CREATE MODE ACTIVATED')
+    console.log('DEBUG - Submitting with:', {
+      imagePreviews: imagePreviews.value,
+      newImages: imagePreviews.value.filter(img => !img.existing),
+      featuredImage: form.featured_image
     })
+    
+    const formData = new FormData()
+    formData.append('name', form.name)
+    formData.append('description', form.description)
+    formData.append('price', form.price)
+    formData.append('stock_quantity', form.stock_quantity)
+    
+    // Agregar imagen destacada si hay
+    if (form.featured_image) {
+      formData.append('featured_image', form.featured_image)
+      console.log('DEBUG - CREATE: Added featured image:', form.featured_image.name)
+    }
+    
+    // Agregar imágenes nuevas
+    const newImages = imagePreviews.value.filter(img => !img.existing)
+    console.log('DEBUG - CREATE: New images to upload:', newImages.length)
+    
+    newImages.forEach((img, index) => {
+      if (img.file) {
+        formData.append(`images[${index}]`, img.file)
+        console.log(`DEBUG - CREATE: Adding image ${index}:`, img.file.name)
+      } else {
+        console.warn(`DEBUG - CREATE: Image ${index} has no file:`, img)
+      }
+    })
+    
+    // Debug FormData contents
+    console.log('DEBUG - CREATE: FormData contents:')
+    for (let [key, value] of formData.entries()) {
+      console.log(`  ${key}:`, value instanceof File ? value.name : value)
+    }
+
+    try {
+      const response = await fetch(route('store.products.store', props.vendor.id), {
+        method: 'POST',
+        headers: {
+          'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+          'Accept': 'application/json',
+        },
+        body: formData
+      })
+      
+      if (response.ok) {
+        console.log('DEBUG - CREATE: Product created successfully')
+        form.reset()
+        imagePreviews.value = []
+        featuredImagePreview.value = null
+        window.location.href = route('store.show', [props.vendor.store_slug])
+      } else {
+        const error = await response.json()
+        console.error('DEBUG - CREATE: Create errors:', error)
+        // Handle validation errors
+        if (error.errors) {
+          Object.entries(error.errors).forEach(([field, messages]) => {
+            console.error(`${field}:`, messages)
+          })
+        }
+      }
+    } catch (error) {
+      console.error('DEBUG - CREATE: Network error:', error)
+    }
   }
 }
 </script>

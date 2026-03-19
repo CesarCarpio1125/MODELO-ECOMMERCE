@@ -44,12 +44,12 @@ class ProductService
 
         $product->save();
 
-        // Handle featured image upload
+        // Handle featured image upload with MediaLibrary
         if (isset($data['featured_image']) && $data['featured_image'] instanceof UploadedFile) {
             $this->uploadFeaturedImage($product, $data['featured_image']);
         }
 
-        // Handle multiple image uploads
+        // Handle multiple image uploads with MediaLibrary
         if (isset($data['images']) && is_array($data['images'])) {
             $this->uploadProductImages($product, $data['images']);
         }
@@ -64,6 +64,15 @@ class ProductService
 
     public function updateProduct(Product $product, array $data): Product
     {
+        \Log::info('ProductService: updateProduct called', [
+            'product_id' => $product->id,
+            'data_keys' => array_keys($data),
+            'has_featured_image' => isset($data['featured_image']),
+            'featured_image_type' => isset($data['featured_image']) ? gettype($data['featured_image']) : 'not_set',
+            'has_images' => isset($data['images']),
+            'images_count' => isset($data['images']) && is_array($data['images']) ? count($data['images']) : 0
+        ]);
+
         $product->update([
             'name' => $data['name'] ?? $product->name,
             'description' => $data['description'] ?? $product->description,
@@ -84,11 +93,13 @@ class ProductService
 
         // Handle featured image upload
         if (isset($data['featured_image']) && $data['featured_image'] instanceof UploadedFile) {
+            \Log::info('ProductService: Calling uploadFeaturedImage from updateProduct');
             $this->uploadFeaturedImage($product, $data['featured_image']);
         }
 
         // Handle multiple image uploads
         if (isset($data['images']) && is_array($data['images'])) {
+            \Log::info('ProductService: Calling uploadProductImages from updateProduct');
             $this->uploadProductImages($product, $data['images']);
         }
 
@@ -96,6 +107,12 @@ class ProductService
         if (isset($data['variants']) && is_array($data['variants'])) {
             $this->updateProductVariants($product, $data['variants']);
         }
+
+        \Log::info('ProductService: updateProduct completed', [
+            'product_id' => $product->id,
+            'featured_image_after' => $product->featured_image,
+            'images_after' => $product->images
+        ]);
 
         return $product->fresh();
     }
@@ -134,42 +151,232 @@ class ProductService
             });
         }
 
-        return $query->orderBy('created_at', 'desc')->get();
+        return $query->orderBy('created_at', 'desc')
+            ->get()
+            ->map(function ($product) {
+                $product->featured_image_url = $product->getFeaturedImageUrl();
+                return $product;
+            });
     }
 
     private function uploadFeaturedImage(Product $product, UploadedFile $image): void
     {
-        $path = $image->store($product->getFeaturedImagePath(), 'public');
-        $product->featured_image = $path;
-        $product->save();
+        \Log::info('ProductService: Starting featured image upload with MediaLibrary', [
+            'product_id' => $product->id,
+            'original_name' => $image->getClientOriginalName(),
+            'size' => $image->getSize(),
+            'mime_type' => $image->getMimeType(),
+        ]);
+
+        try {
+            $product->addMediaFromRequest('featured_image')
+                ->usingFileName($product->slug . '-featured.' . $image->getClientOriginalExtension())
+                ->withCustomProperties([
+                    'product_id' => $product->id,
+                    'vendor_id' => $product->vendor_id,
+                    'uploaded_by' => auth()->id(),
+                ])
+                ->toMediaCollection('featured-image', 'public');
+
+            \Log::info('ProductService: Featured image uploaded successfully to MediaLibrary', [
+                'product_id' => $product->id,
+                'featured_image_url' => $product->getFeaturedImageUrl()
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('ProductService: Failed to upload featured image to MediaLibrary', [
+                'product_id' => $product->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            // Fallback al sistema antiguo
+            $this->uploadFeaturedImageLegacy($product, $image);
+        }
+    }
+
+    private function uploadFeaturedImageLegacy(Product $product, UploadedFile $image): void
+    {
+        \Log::info('ProductService: Using legacy featured image upload', [
+            'product_id' => $product->id,
+            'original_name' => $image->getClientOriginalName(),
+            'size' => $image->getSize(),
+            'mime_type' => $image->getMimeType(),
+            'upload_path' => $product->getFeaturedImagePath()
+        ]);
+
+        try {
+            $path = $image->store($product->getFeaturedImagePath(), 'public');
+            
+            \Log::info('ProductService: Image stored successfully', [
+                'product_id' => $product->id,
+                'stored_path' => $path,
+                'full_storage_path' => storage_path('app/public/' . $path),
+                'file_exists_after_store' => file_exists(storage_path('app/public/' . $path))
+            ]);
+
+            $product->featured_image = $path;
+            $product->save();
+
+            \Log::info('ProductService: Product updated with featured image', [
+                'product_id' => $product->id,
+                'featured_image_field' => $product->featured_image,
+                'featured_image_url' => $product->getFeaturedImageUrl()
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('ProductService: Failed to upload featured image', [
+                'product_id' => $product->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            throw $e;
+        }
     }
 
     private function uploadProductImages(Product $product, array $images): void
     {
-        $uploadedImages = [];
+        \Log::info('ProductService: Starting multiple images upload with MediaLibrary', [
+            'product_id' => $product->id,
+            'images_count' => count($images),
+            'images_data' => array_map(fn($img) => $img instanceof UploadedFile ? [
+                'original_name' => $img->getClientOriginalName(),
+                'size' => $img->getSize(),
+                'mime_type' => $img->getMimeType()
+            ] : 'not_uploaded', $images)
+        ]);
 
-        foreach ($images as $image) {
+        $uploadedCount = 0;
+
+        foreach ($images as $key => $image) {
             if ($image instanceof UploadedFile) {
-                $path = $image->store($product->getImagesPath(), 'public');
-                $uploadedImages[] = $path;
+                try {
+                    $product->addMedia($image)
+                        ->usingFileName($product->slug . '-gallery-' . ($key + 1) . '.' . $image->getClientOriginalExtension())
+                        ->withCustomProperties([
+                            'product_id' => $product->id,
+                            'vendor_id' => $product->vendor_id,
+                            'uploaded_by' => auth()->id(),
+                            'gallery_order' => $key,
+                        ])
+                        ->toMediaCollection('product-gallery', 'public');
+
+                    $uploadedCount++;
+                    
+                    \Log::info('ProductService: Image uploaded successfully to MediaLibrary', [
+                        'product_id' => $product->id,
+                        'image_key' => $key,
+                        'original_name' => $image->getClientOriginalName()
+                    ]);
+                    
+                } catch (\Exception $e) {
+                    \Log::error('ProductService: Failed to upload image to MediaLibrary', [
+                        'product_id' => $product->id,
+                        'image_key' => $key,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                }
+            }
+        }
+
+        if ($uploadedCount > 0) {
+            \Log::info('ProductService: Product images uploaded successfully to MediaLibrary', [
+                'product_id' => $product->id,
+                'uploaded_count' => $uploadedCount,
+                'total_images_after' => count($product->getCarouselImages())
+            ]);
+        } else {
+            \Log::warning('ProductService: No images were successfully uploaded to MediaLibrary', [
+                'product_id' => $product->id,
+                'attempted_count' => count($images),
+                'successful_count' => $uploadedCount
+            ]);
+            
+            // Fallback al sistema antiguo
+            $this->uploadProductImagesLegacy($product, $images);
+        }
+    }
+
+    private function uploadProductImagesLegacy(Product $product, array $images): void
+    {
+        \Log::info('ProductService: Using legacy multiple images upload', [
+            'product_id' => $product->id,
+            'images_count' => count($images),
+            'images_data' => array_map(fn($img) => $img instanceof UploadedFile ? [
+                'original_name' => $img->getClientOriginalName(),
+                'size' => $img->getSize(),
+                'mime_type' => $img->getMimeType()
+            ] : 'not_uploaded', $images)
+        ]);
+
+        $uploadedImages = [];
+        $currentImages = $product->images ?? [];
+
+        foreach ($images as $key => $image) {
+            if ($image instanceof UploadedFile) {
+                try {
+                    $path = $image->store($product->getImagesPath(), 'public');
+                    
+                    \Log::info('ProductService: Image stored successfully', [
+                        'product_id' => $product->id,
+                        'image_key' => $key,
+                        'stored_path' => $path,
+                        'full_storage_path' => storage_path('app/public/' . $path),
+                        'file_exists_after_store' => file_exists(storage_path('app/public/' . $path))
+                    ]);
+                    
+                    $uploadedImages[] = $path;
+                } catch (\Exception $e) {
+                    \Log::error('ProductService: Failed to upload image', [
+                        'product_id' => $product->id,
+                        'image_key' => $key,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                }
             }
         }
 
         if (! empty($uploadedImages)) {
-            $currentImages = $product->images ?? [];
-            $product->images = array_merge($currentImages, $uploadedImages);
+            $allImages = array_merge($currentImages, $uploadedImages);
+            
+            \Log::info('ProductService: Updating product with all images', [
+                'product_id' => $product->id,
+                'current_images_count' => count($currentImages),
+                'new_images_count' => count($uploadedImages),
+                'total_images_after_merge' => count($allImages),
+                'images_field' => $allImages
+            ]);
+
+            $product->images = $allImages;
             $product->save();
+
+            \Log::info('ProductService: Product images updated successfully', [
+                'product_id' => $product->id,
+                'final_images_count' => count($product->images)
+            ]);
+        } else {
+            \Log::warning('ProductService: No images were successfully uploaded', [
+                'product_id' => $product->id,
+                'attempted_count' => count($images),
+                'successful_count' => count($uploadedImages)
+            ]);
         }
     }
 
     private function deleteProductImages(Product $product): void
     {
-        // Delete featured image
+        // Eliminar imágenes de MediaLibrary
+        $product->clearMediaCollection('featured-image');
+        $product->clearMediaCollection('product-gallery');
+
+        // Eliminar imágenes del sistema antiguo (compatibilidad)
         if ($product->featured_image) {
             Storage::disk('public')->delete($product->featured_image);
         }
 
-        // Delete product images
         if ($product->images) {
             foreach ($product->images as $image) {
                 Storage::disk('public')->delete($image);
